@@ -14,7 +14,7 @@
   main{max-width:760px;margin:0 auto;padding:8px 18px}
   h2{font-size:15px;color:var(--acc);margin:22px 0 8px}
   .track{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin:7px 0;cursor:pointer}
-  .track:hover{border-color:var(--acc)} .track.playing{border-color:var(--acc);background:#1d2440}
+  .track:hover{border-color:var(--acc)} .del{background:#3a1d2a;border-color:#6e2f45;color:#ff9db4;font-size:12px;padding:5px 10px} .track.playing{border-color:var(--acc);background:#1d2440}
   .t{font-size:14px;line-height:1.45} .d{color:var(--dim);font-size:12px;white-space:nowrap}
   .msg{color:var(--dim);padding:30px 0;text-align:center;font-size:14px}
   #player{position:fixed;left:0;right:0;bottom:0;background:#121830f2;border-top:1px solid var(--line);backdrop-filter:blur(8px)}
@@ -32,7 +32,12 @@
   <h1>🌙 催眠小窗</h1>
   <div class="sub" id="sub">睡前听书 · 书架加载中…</div>
 </header>
-<div class="bar"><input type="search" id="q" placeholder="搜书名 / 章节…"></div>
+<div class="bar"><input type="search" id="q" placeholder="搜书名 / 章节…"><button id="adminBtn">管理员登录</button></div>
+<div class="bar" id="loginBox" style="display:none">
+  <input type="email" id="em" placeholder="管理员邮箱" style="flex:1;background:var(--card);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px 12px;font-size:14px">
+  <input type="password" id="pw" placeholder="密码" style="flex:1;background:var(--card);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px 12px;font-size:14px">
+  <button id="doLogin" class="main" style="background:var(--acc);color:#fff;border-radius:10px;padding:10px 16px">登录</button>
+</div>
 <main id="list"><div class="msg">正在从书架取书…</div></main>
 
 <div id="player"><div class="in">
@@ -49,7 +54,8 @@
 </div></div>
 <audio id="a" preload="metadata"></audio>
 <script>
-const API = "https://ocqfhempmbxmriecijrg.supabase.co/functions/v1/sleep-window?catalog=1";
+const FN = "https://ocqfhempmbxmriecijrg.supabase.co/functions/v1/sleep-window";
+const API = FN + "?catalog=1";
 const listEl = document.getElementById('list'), subEl = document.getElementById('sub');
 const audio = document.getElementById('a'), nowEl = document.getElementById('now');
 const playBtn = document.getElementById('play'), seekEl = document.getElementById('seek'), timeEl = document.getElementById('time');
@@ -65,10 +71,11 @@ function render(filter=''){
   let out = '';
   groups.forEach((idxs, b) => {
     out += '<h2>《' + esc(b) + '》 · ' + idxs.length + ' 集</h2>';
-    idxs.forEach(i => { out += '<div class="track' + (i===cur ? ' playing' : '') + '" data-i="' + i + '"><span class="t">' + esc(tracks[i].title) + '</span><span class="d">' + fmt(tracks[i].duration_sec) + '</span></div>'; });
+    idxs.forEach(i => { out += '<div class="track' + (i===cur ? ' playing' : '') + '" data-i="' + i + '"><span class="t">' + esc(tracks[i].title) + '</span><span class="d">' + fmt(tracks[i].duration_sec) + '</span>' + (isAdmin() ? '<button class="del" data-del="' + tracks[i].id + '">删除</button>' : '') + '</div>'; });
   });
   listEl.innerHTML = out;
   listEl.querySelectorAll('.track').forEach(el => el.onclick = () => play(+el.dataset.i));
+  listEl.querySelectorAll('.del').forEach(b => b.onclick = e => { e.stopPropagation(); delTrack(+b.dataset.del); });
 }
 function play(i){
   if(i<0 || i>=tracks.length) return;
@@ -90,6 +97,30 @@ audio.ontimeupdate = () => {
 };
 seekEl.oninput = () => { if(audio.duration) audio.currentTime = seekEl.value/1000 * audio.duration; };
 document.getElementById('q').oninput = e => render(e.target.value);
+function isAdmin(){ return !!sessionStorage.getItem('sw_token'); }
+const adminBtn = document.getElementById('adminBtn'), loginBox = document.getElementById('loginBox');
+function syncAdminBtn(){ adminBtn.textContent = isAdmin() ? ('管理员：' + (sessionStorage.getItem('sw_email') || '') + '（退出）') : '管理员登录'; }
+adminBtn.onclick = () => {
+  if(isAdmin()){ sessionStorage.removeItem('sw_token'); sessionStorage.removeItem('sw_email'); loginBox.style.display='none'; syncAdminBtn(); render(document.getElementById('q').value); return; }
+  loginBox.style.display = loginBox.style.display === 'none' ? 'flex' : 'none';
+};
+document.getElementById('doLogin').onclick = async () => {
+  const em = document.getElementById('em').value.trim(), pw = document.getElementById('pw').value;
+  if(!em || !pw) return;
+  const r = await fetch(FN + '?login=1', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email: em, password: pw }) });
+  const d = await r.json().catch(() => ({}));
+  if(r.ok && d.access_token){ sessionStorage.setItem('sw_token', d.access_token); sessionStorage.setItem('sw_email', em); loginBox.style.display='none'; document.getElementById('pw').value=''; syncAdminBtn(); render(document.getElementById('q').value); }
+  else alert('登录失败：' + (d.error || d.msg || r.status));
+};
+async function delTrack(id){
+  const t = tracks.find(x => x.id === id); if(!t) return;
+  if(!confirm('确定删除《' + t.title + '》？记录和 MP3 文件一起删，不可恢复。')) return;
+  const r = await fetch(FN + '?delete=1', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer ' + sessionStorage.getItem('sw_token')}, body: JSON.stringify({ id: id }) });
+  const d = await r.json().catch(() => ({}));
+  if(r.ok && d.ok){ tracks = tracks.filter(x => x.id !== id); subEl.textContent = '睡前听书 · 共 ' + tracks.length + ' 集 · 书架实时同步，新书自动出现'; render(document.getElementById('q').value); }
+  else { alert('删除失败：' + (d.error || r.status)); if(r.status === 401 || r.status === 403){ sessionStorage.removeItem('sw_token'); sessionStorage.removeItem('sw_email'); syncAdminBtn(); render(document.getElementById('q').value); } }
+}
+syncAdminBtn();
 fetch(API).then(r => r.json()).then(d => {
   tracks = d.tracks || [];
   subEl.textContent = '睡前听书 · 共 ' + tracks.length + ' 集 · 书架实时同步，新书自动出现';
